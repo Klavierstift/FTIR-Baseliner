@@ -12,21 +12,22 @@ python -m pip install numpy scipy matplotlib
 
 ## Run
 
-Start the program and choose an input file from the picker:
+Start the program and choose one or more input files from the picker:
 
 ```powershell
 python main.py
 ```
 
-Or provide an ASP or CSV file directly:
+Or provide one or more ASP or CSV files directly:
 
 ```powershell
 python main.py samples/ABS-1.csv
+python main.py samples/ABS-1.csv samples/ABS-2.csv --no-plot --output-dir results
 ```
 
-The plot opens by default with the measured spectrum, baseline, and baseline-corrected spectrum. For cloth fits, adjust stiffness with the logarithmic slider or enter a positive value in the numeric field. The selected fit is saved after the plot closes.
+The plot opens by default with the measured spectrum, baseline, and baseline-corrected spectrum. For cloth fits, adjust stiffness with the logarithmic slider or enter a positive value in the numeric field. In a multi-file run, one window stays open while files are reviewed. Click **Save / Next** to save the current baseline and show the next file; the final button is **Save / Done**. Closing the window early leaves unconfirmed files unsaved and reports them. Use `--no-plot` for unattended batch processing.
 
-By default, the baseline is saved beside the input as `<input-name>_baseline.asp`. Use `--output` to choose another path or `--output-format csv` to save a two-column CSV instead.
+By default, each baseline is saved beside its input as `<input-name>_baseline.asp`. Use `--output` to choose a different path for a single input, or `--output-dir` to put batch outputs in one directory. Use `--output-format csv` to save two-column CSV files instead.
 
 ## Input Formats
 
@@ -48,6 +49,7 @@ Signal type is detected from CSV unit headers such as `%T` or `A`. For unlabeled
 | `--no-plot` | Disable plotting. Plotting is on by default. |
 | `--no-show-baseline-corrected` | Hide the baseline-corrected panel while keeping the main plot. It is shown by default. |
 | `--output PATH` | Set the baseline output path. |
+| `--output-dir PATH` | Set the directory for outputs from a batch run. |
 | `--output-format FORMAT` | Choose `asp` or `csv`; default is `asp`. |
 | `-h`, `--help` | Show all command-line options. |
 
@@ -62,6 +64,9 @@ python main.py samples/ABS-1.csv --display-as absorbance
 
 # Fit only the specified regions and skip the range between them
 python main.py samples/ABS-1.csv --fit-range 650 1800 --fit-range 2800 4000 --ignore-range 1800 2800
+
+# Process several files without opening an individual plot for each
+python main.py samples/ABS-1.csv samples/ABS-2.csv --no-plot --output-dir results
 ```
 
 ## Python API
@@ -79,3 +84,15 @@ baseline = fit_asp_spectrum(
 ```
 
 `baseline` is a one-dimensional NumPy array aligned with the input rows. The fitter is cloth-only; the previous rotation-based fitter is no longer included.
+
+For multiple input files, use `fit_batch_spectra()`. It returns `(output_paths, failures)`, where each failure contains the input path and an error message:
+
+```python
+from main import fit_batch_spectra
+
+outputs, failures = fit_batch_spectra(
+    ["samples/ABS-1.csv", "samples/ABS-2.csv"],
+    output_dir="results",
+    plot=False,
+)
+```

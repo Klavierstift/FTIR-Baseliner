@@ -6,11 +6,12 @@ Example:
 
 import argparse
 from pathlib import Path
+import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import CubicHermiteSpline
-from matplotlib.widgets import Slider, TextBox
+from matplotlib.widgets import Button, Slider, TextBox
 
 from asp_reader import ASP_Reader, detect_signal_type
 from asp_writer import ASP_Writer
@@ -315,6 +316,208 @@ def show_fit(
 	return current_baseline[0], current_stiffness[0]
 
 
+def show_batch_fits(
+	items,
+	*,
+	stiffness,
+	baseline_points,
+	fit_ranges,
+	ignore_ranges,
+	show_baseline_corrected,
+	display_as,
+	output_format,
+):
+	"""Review multiple spectra in one window and save each on confirmation."""
+	figure, axes = plt.subplots(2 if show_baseline_corrected else 1, 1, sharex=True)
+	if show_baseline_corrected:
+		axis, corrected_axis = axes
+	else:
+		axis = axes
+		corrected_axis = None
+	figure.tight_layout(rect=(0.05, 0.2, 0.98, 0.91))
+
+	initial_exponent = np.log10(float(stiffness))
+	slider_axis = figure.add_axes((0.13, 0.09, 0.43, 0.045))
+	stiffness_slider = Slider(
+		slider_axis,
+		"Stiffness (log)",
+		min(-7.0, initial_exponent - 2),
+		max(-3.0, initial_exponent + 2),
+		valinit=initial_exponent,
+		valstep=0.05,
+		valfmt="%1.2f",
+	)
+	input_axis = figure.add_axes((0.61, 0.085, 0.17, 0.055))
+	stiffness_input = TextBox(input_axis, "Value", initial=f"{stiffness:.2g}")
+	button_axis = figure.add_axes((0.81, 0.085, 0.16, 0.055))
+	index = [0]
+	saved_paths = []
+	failures = []
+	status_text = figure.text(0.13, 0.025, "", fontsize=9, color="tab:red")
+	save_button = Button(button_axis, "Save / Next")
+	updating_controls = [False]
+
+	def draw_current_item():
+		item = items[index[0]]
+		data = item["data"]
+		display_units = item["signal_type"] if display_as == "source" else display_as
+		display_data, display_baseline = _convert_for_display(
+			data, item["baseline"], item["signal_type"], display_units
+		)
+		axis.clear()
+		axis.plot(data[:, 0], display_data, label="Spectrum")
+		axis.plot(data[:, 0], display_baseline, label="Baseline fit")
+		axis.set_ylabel("Transmittance (%)" if display_units == "transmittance" else "Absorbance")
+		axis.set_xlabel("Wavenumber (cm-1)")
+		axis.set_xlim(float(np.max(data[:, 0])), float(np.min(data[:, 0])))
+		axis.grid(True, alpha=0.25)
+		for range_index, (lower, upper) in enumerate(_validate_ranges(fit_ranges, "fit_ranges")):
+			axis.axvspan(
+				lower,
+				upper,
+				color="tab:green",
+				alpha=0.1,
+				label="Fitting region" if range_index == 0 else None,
+			)
+		for range_index, (lower, upper) in enumerate(_validate_ranges(ignore_ranges, "ignore_ranges")):
+			axis.axvspan(
+				lower,
+				upper,
+				color="tab:red",
+				alpha=0.12,
+				label="Ignored region" if range_index == 0 else None,
+			)
+		axis.legend()
+		if corrected_axis is not None:
+			corrected_axis.clear()
+			corrected_axis.plot(
+				data[:, 0],
+				display_data - display_baseline,
+				label="Baseline-corrected spectrum",
+			)
+			corrected_axis.axhline(0, color="black", linewidth=0.8, alpha=0.5)
+			corrected_axis.set_ylabel(
+				"Baseline-corrected transmittance (%)"
+				if display_units == "transmittance"
+				else "Baseline-corrected absorbance"
+			)
+			corrected_axis.set_xlabel("Wavenumber (cm-1)")
+			corrected_axis.set_xlim(float(np.max(data[:, 0])), float(np.min(data[:, 0])))
+			corrected_axis.grid(True, alpha=0.25)
+			for range_index, (lower, upper) in enumerate(_validate_ranges(fit_ranges, "fit_ranges")):
+				corrected_axis.axvspan(
+					lower,
+					upper,
+					color="tab:green",
+					alpha=0.1,
+					label="Fitting region" if range_index == 0 else None,
+				)
+			for range_index, (lower, upper) in enumerate(_validate_ranges(ignore_ranges, "ignore_ranges")):
+				corrected_axis.axvspan(
+					lower,
+					upper,
+					color="tab:red",
+					alpha=0.12,
+					label="Ignored region" if range_index == 0 else None,
+				)
+			corrected_axis.legend()
+		figure.suptitle(f"Spectrum {index[0] + 1} of {len(items)}: {item['input_path'].name}")
+		updating_controls[0] = True
+		stiffness_slider.set_val(np.log10(item["stiffness"]))
+		stiffness_input.set_val(f"{item['stiffness']:.2g}")
+		updating_controls[0] = False
+		save_button.label.set_text(
+			"Save / Done" if index[0] == len(items) - 1 else "Save / Next"
+		)
+		figure.canvas.draw_idle()
+
+	def update_current_stiffness(new_stiffness):
+		item = items[index[0]]
+		try:
+			new_baseline = fit_asp_spectrum(
+				item["data"],
+				signal_type=item["signal_type"],
+				baseline_points=baseline_points,
+				stiffness=new_stiffness,
+				fit_ranges=fit_ranges,
+				ignore_ranges=ignore_ranges,
+			)
+			display_units = item["signal_type"] if display_as == "source" else display_as
+			_convert_for_display(item["data"], new_baseline, item["signal_type"], display_units)
+		except (ValueError, RuntimeError) as error:
+			status_text.set_text(f"Fit failed: {error}")
+			figure.canvas.draw_idle()
+			return
+		item["baseline"] = new_baseline
+		item["stiffness"] = new_stiffness
+		status_text.set_text("")
+		draw_current_item()
+
+	def update_slider(exponent):
+		if not updating_controls[0]:
+			update_current_stiffness(10 ** float(exponent))
+
+	def submit_stiffness(value):
+		try:
+			new_stiffness = float(value)
+			new_exponent = np.log10(new_stiffness)
+		except (TypeError, ValueError):
+			status_text.set_text("Enter a positive numeric stiffness value.")
+			draw_current_item()
+			return
+		if not np.isfinite(new_stiffness) or new_stiffness <= 0:
+			status_text.set_text("Enter a positive finite stiffness value.")
+			draw_current_item()
+			return
+		if not stiffness_slider.valmin <= new_exponent <= stiffness_slider.valmax:
+			status_text.set_text("Value is outside the stiffness slider range.")
+			draw_current_item()
+			return
+		status_text.set_text("")
+		stiffness_slider.set_val(new_exponent)
+
+	def save_and_advance(_event):
+		item = items[index[0]]
+		try:
+			_write_baseline(item["output_path"], item["data"], item["baseline"], output_format)
+		except (OSError, ValueError) as error:
+			status_text.set_text(f"Save failed: {error}")
+			figure.canvas.draw_idle()
+			return
+		saved_paths.append(item["output_path"])
+		index[0] += 1
+		if index[0] == len(items):
+			plt.close(figure)
+			return
+		draw_current_item()
+
+	stiffness_slider.on_changed(update_slider)
+	stiffness_input.on_submit(submit_stiffness)
+	save_button.on_clicked(save_and_advance)
+	setattr(figure, "_batch_save_button", save_button)
+	setattr(figure, "_batch_save_and_advance", save_and_advance)
+	draw_current_item()
+	plt.show()
+	for item in items[index[0]:]:
+		if item["output_path"] not in saved_paths:
+			failures.append((item["input_path"], "Not saved before batch review window closed"))
+	return saved_paths, failures
+
+
+def _write_baseline(output_path, data, baseline, output_format):
+	baseline_data = np.column_stack((data[:, 0], baseline))
+	if output_format == "asp":
+		ASP_Writer(output_path).write(baseline_data)
+	else:
+		np.savetxt(
+			output_path,
+			baseline_data,
+			delimiter=",",
+			header="wavenumber,baseline",
+			comments="",
+		)
+
+
 def _convert_for_display(data, baseline, signal_type, display_as):
 	signal = np.asarray(data[:, 1], dtype=float)
 	baseline = np.asarray(baseline, dtype=float)
@@ -335,7 +538,7 @@ def _convert_for_display(data, baseline, signal_type, display_as):
 	return displayed_signal, displayed_baseline
 
 
-def _choose_input_file():
+def _choose_input_files():
 	try:
 		import tkinter as tk
 		from tkinter import filedialog
@@ -345,13 +548,136 @@ def _choose_input_file():
 	root = tk.Tk()
 	root.withdraw()
 	try:
-		selected_path = filedialog.askopenfilename(
-			title="Open FTIR spectrum",
+		selected_paths = filedialog.askopenfilenames(
+			title="Open FTIR spectra",
 			filetypes=(("ASP and CSV spectra", "*.asp *.csv"), ("All files", "*.*")),
 		)
 	finally:
 		root.destroy()
-	return Path(selected_path) if selected_path else None
+	return [Path(path) for path in selected_paths]
+
+
+def fit_batch_spectra(
+	input_paths,
+	*,
+	output_format="asp",
+	output_dir=None,
+	output_path=None,
+	stiffness=9e-5,
+	baseline_points=226,
+	signal_type="auto",
+	fit_ranges=None,
+	ignore_ranges=None,
+	plot=True,
+	show_baseline_corrected=True,
+	display_as="source",
+):
+	"""Fit and save baselines for multiple ASP or CSV files.
+
+	Returns (output_paths, failures), where failures contains (input_path, error)
+	pairs for files that could not be processed.
+	"""
+	input_paths = [Path(path) for path in input_paths]
+	if not input_paths:
+		raise ValueError("At least one input file is required")
+	if output_format not in ("asp", "csv"):
+		raise ValueError("output_format must be 'asp' or 'csv'")
+	if output_path is not None and (len(input_paths) != 1 or output_dir is not None):
+		raise ValueError("--output can only be used with one input and without --output-dir")
+	if output_dir is not None:
+		output_dir = Path(output_dir)
+		output_dir.mkdir(parents=True, exist_ok=True)
+		output_names = [f"{path.stem}_baseline.{output_format}".casefold() for path in input_paths]
+		if len(set(output_names)) != len(output_names):
+			raise ValueError("Batch inputs have duplicate filenames; use separate input directories")
+
+	items = []
+	failures = []
+	for input_path in input_paths:
+		try:
+			reader = ASP_Reader(input_path)
+			data = reader.read()
+			resolved_signal_type = (
+				signal_type if signal_type != "auto" else reader.signal_type
+			) or detect_signal_type(data)
+			baseline = fit_asp_spectrum(
+				data,
+				signal_type=resolved_signal_type,
+				baseline_points=baseline_points,
+				stiffness=stiffness,
+				fit_ranges=fit_ranges,
+				ignore_ranges=ignore_ranges,
+			)
+			if output_path is not None:
+				current_output_path = Path(output_path)
+			elif output_dir is not None:
+				current_output_path = output_dir / f"{input_path.stem}_baseline.{output_format}"
+			else:
+				current_output_path = input_path.with_name(
+					f"{input_path.stem}_baseline.{output_format}"
+				)
+			if plot:
+				display_units = resolved_signal_type if display_as == "source" else display_as
+				_convert_for_display(data, baseline, resolved_signal_type, display_units)
+			items.append(
+				{
+					"input_path": input_path,
+					"data": data,
+					"signal_type": resolved_signal_type,
+					"baseline": baseline,
+					"stiffness": stiffness,
+					"output_path": current_output_path,
+				}
+			)
+		except (OSError, ValueError, RuntimeError) as error:
+			failures.append((input_path, str(error)))
+
+	if plot and len(input_paths) > 1 and items:
+		output_paths, review_failures = show_batch_fits(
+			items,
+			stiffness=stiffness,
+			baseline_points=baseline_points,
+			fit_ranges=fit_ranges,
+			ignore_ranges=ignore_ranges,
+			show_baseline_corrected=show_baseline_corrected,
+			display_as=display_as,
+			output_format=output_format,
+		)
+		failures.extend(review_failures)
+		return output_paths, failures
+
+	output_paths = []
+	for item in items:
+		baseline = item["baseline"]
+		if plot:
+			try:
+				baseline, _ = show_fit(
+					item["data"],
+					baseline,
+					item["signal_type"],
+					fit_ranges,
+					ignore_ranges,
+					show_baseline_corrected,
+					display_as,
+					stiffness=stiffness,
+					baseline_fitter=lambda selected_stiffness: fit_asp_spectrum(
+						item["data"],
+						signal_type=item["signal_type"],
+						baseline_points=baseline_points,
+						stiffness=selected_stiffness,
+						fit_ranges=fit_ranges,
+						ignore_ranges=ignore_ranges,
+					),
+				)
+			except (OSError, ValueError, RuntimeError) as error:
+				failures.append((item["input_path"], str(error)))
+				continue
+		try:
+			_write_baseline(item["output_path"], item["data"], baseline, output_format)
+			output_paths.append(item["output_path"])
+		except (OSError, ValueError) as error:
+			failures.append((item["input_path"], str(error)))
+	return output_paths, failures
 
 
 def main(argv=None):
@@ -359,9 +685,9 @@ def main(argv=None):
 	parser.add_argument(
 		"input",
 		type=Path,
-		nargs="?",
+		nargs="*",
 		metavar="INPUT",
-		help="ASP or two-column CSV file (opens a file picker when omitted)",
+		help="One or more ASP or CSV files (opens a multi-select picker when omitted)",
 	)
 	parser.add_argument(
 		"--stiffness",
@@ -406,7 +732,12 @@ def main(argv=None):
 	parser.add_argument(
 		"--output",
 		type=Path,
-		help="Output path for the fitted baseline",
+		help="Output path for a single input file",
+	)
+	parser.add_argument(
+		"--output-dir",
+		type=Path,
+		help="Directory for batch baseline outputs (defaults to each input's directory)",
 	)
 	parser.add_argument(
 		"--output-format",
@@ -432,72 +763,40 @@ def main(argv=None):
 		),
 	)
 	args = parser.parse_args(argv)
-	if args.input is None:
+	if not args.input:
 		try:
-			args.input = _choose_input_file()
+			args.input = _choose_input_files()
 		except (OSError, RuntimeError) as error:
 			parser.error(str(error))
-		if args.input is None:
+		if not args.input:
 			parser.exit(0, "No input file selected.\n")
-
+	if args.output is not None and len(args.input) != 1:
+		parser.error("--output can only be used with one input; use --output-dir for batch runs")
+	if args.output is not None and args.output_dir is not None:
+		parser.error("--output and --output-dir cannot be used together")
 	try:
-		reader = ASP_Reader(args.input)
-		data = reader.read()
-		signal_type = (
-			(args.signal_type if args.signal_type != "auto" else reader.signal_type)
-			or detect_signal_type(data)
-		)
-		baseline = fit_asp_spectrum(
-			data,
-			signal_type=signal_type,
-			baseline_points=args.baseline_points,
+		output_paths, failures = fit_batch_spectra(
+			args.input,
+			output_format=args.output_format,
+			output_dir=args.output_dir,
+			output_path=args.output,
 			stiffness=args.stiffness,
+			baseline_points=args.baseline_points,
+			signal_type=args.signal_type,
 			fit_ranges=args.fit_range,
 			ignore_ranges=args.ignore_range,
-		)
-		output_path = args.output or args.input.with_name(
-			f"{args.input.stem}_baseline.{args.output_format}"
+			plot=args.plot,
+			show_baseline_corrected=args.show_baseline_corrected,
+			display_as=args.display_as,
 		)
 	except (OSError, ValueError) as error:
 		parser.error(str(error))
-
-	if args.plot:
-		baseline, _ = show_fit(
-			data,
-			baseline,
-			signal_type,
-			args.fit_range,
-			args.ignore_range,
-			args.show_baseline_corrected,
-			args.display_as,
-			stiffness=args.stiffness,
-			baseline_fitter=lambda selected_stiffness: fit_asp_spectrum(
-				data,
-				signal_type=signal_type,
-				baseline_points=args.baseline_points,
-				stiffness=selected_stiffness,
-				fit_ranges=args.fit_range,
-				ignore_ranges=args.ignore_range,
-			),
-		)
-
-	try:
-		baseline_data = np.column_stack((data[:, 0], baseline))
-		if args.output_format == "asp":
-			ASP_Writer(output_path).write(baseline_data)
-		else:
-			np.savetxt(
-				output_path,
-				baseline_data,
-				delimiter=",",
-				header="wavenumber,baseline",
-				comments="",
-			)
-	except (OSError, ValueError) as error:
-		parser.error(str(error))
-
-	print(f"Baseline fit saved to {output_path}")
+	for output_path in output_paths:
+		print(f"Baseline fit saved to {output_path}")
+	for input_path, error in failures:
+		print(f"Failed to process {input_path}: {error}", file=sys.stderr)
+	return 1 if failures else 0
 
 
 if __name__ == "__main__":
-	main()
+	raise SystemExit(main())
