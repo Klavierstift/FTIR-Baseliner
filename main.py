@@ -14,15 +14,13 @@ from matplotlib.widgets import Slider, TextBox
 
 from asp_reader import ASP_Reader, detect_signal_type
 from asp_writer import ASP_Writer
-from tension_fit import fit_baseline, fit_baseline_cloth
+from tension_fit import fit_baseline_cloth
 
 
 def fit_asp_spectrum(
 	data,
-	rotation_freedom=10.0,
 	signal_type="auto",
 	baseline_points=226,
-	method="cloth",
 	stiffness=1e-5,
 	fit_ranges=None,
 	ignore_ranges=None,
@@ -45,8 +43,6 @@ def fit_asp_spectrum(
 	else:
 		raise ValueError("signal_type must be 'absorbance' or 'transmittance'")
 
-	if method not in ("cloth", "rotation"):
-		raise ValueError("method must be 'cloth' or 'rotation'")
 	fit_ranges = _validate_ranges(fit_ranges, "fit_ranges")
 	ignore_ranges = _validate_ranges(ignore_ranges, "ignore_ranges")
 	fit_mask = np.ones(len(data), dtype=bool)
@@ -79,18 +75,11 @@ def fit_asp_spectrum(
 		caps[1:-1] = np.minimum(segment_minima[:-1], segment_minima[1:])
 		coarse_data = np.column_stack((selected_data[indices, 0], caps))
 
-	if method == "cloth":
-		coarse_baseline = fit_baseline_cloth(
-			coarse_data,
-			stiffness=stiffness,
-			signal_amplitude=np.ptp(selected_data[:, 1]),
-		)
-	else:
-		coarse_baseline = fit_baseline(
-			coarse_data,
-			rotation_freedom=rotation_freedom,
-			signal_amplitude=np.ptp(selected_data[:, 1]),
-		)
+	coarse_baseline = fit_baseline_cloth(
+		coarse_data,
+		stiffness=stiffness,
+		signal_amplitude=np.ptp(selected_data[:, 1]),
+	)
 	order = np.argsort(coarse_data[:, 0])
 	baseline = np.interp(
 		data[:, 0], coarse_data[order, 0], coarse_baseline[order]
@@ -375,18 +364,6 @@ def main(argv=None):
 		help="ASP or two-column CSV file (opens a file picker when omitted)",
 	)
 	parser.add_argument(
-		"--freedom",
-		type=float,
-		default=10.0,
-		help="Segment rotation freedom in percent (0-100; default: 10)",
-	)
-	parser.add_argument(
-		"--method",
-		choices=("cloth", "rotation"),
-		default="cloth",
-		help="Baseline fitting model (default: cloth)",
-	)
-	parser.add_argument(
 		"--stiffness",
 		type=float,
 		default=9e-5,
@@ -439,15 +416,20 @@ def main(argv=None):
 	)
 	parser.add_argument(
 		"--plot",
-		action="store_true",
-		help="Show the spectrum and fitted baseline in a plot",
+		action=argparse.BooleanOptionalAction,
+		default=True,
+		help="Show the spectrum and fitted baseline (default; use --no-plot to disable)",
 	)
 	parser.add_argument(
 		"--show-baseline-corrected",
 		"--show-fitted-spectrum",
 		dest="show_baseline_corrected",
-		action="store_true",
-		help="Show the baseline-corrected spectrum in a separate plot panel",
+		action=argparse.BooleanOptionalAction,
+		default=True,
+		help=(
+			"Show the baseline-corrected spectrum (default; use "
+			"--no-show-baseline-corrected to disable)"
+		),
 	)
 	args = parser.parse_args(argv)
 	if args.input is None:
@@ -467,13 +449,11 @@ def main(argv=None):
 		)
 		baseline = fit_asp_spectrum(
 			data,
-			args.freedom,
-			signal_type,
-			args.baseline_points,
-			args.method,
-			args.stiffness,
-			args.fit_range,
-			args.ignore_range,
+			signal_type=signal_type,
+			baseline_points=args.baseline_points,
+			stiffness=args.stiffness,
+			fit_ranges=args.fit_range,
+			ignore_ranges=args.ignore_range,
 		)
 		output_path = args.output or args.input.with_name(
 			f"{args.input.stem}_baseline.{args.output_format}"
@@ -481,7 +461,7 @@ def main(argv=None):
 	except (OSError, ValueError) as error:
 		parser.error(str(error))
 
-	if args.plot or args.show_baseline_corrected:
+	if args.plot:
 		baseline, _ = show_fit(
 			data,
 			baseline,
@@ -490,20 +470,14 @@ def main(argv=None):
 			args.ignore_range,
 			args.show_baseline_corrected,
 			args.display_as,
-			stiffness=args.stiffness if args.method == "cloth" else None,
-			baseline_fitter=(
-				lambda selected_stiffness: fit_asp_spectrum(
-					data,
-					args.freedom,
-					signal_type,
-					args.baseline_points,
-					args.method,
-					stiffness=selected_stiffness,
-					fit_ranges=args.fit_range,
-					ignore_ranges=args.ignore_range,
-				)
-				if args.method == "cloth"
-				else None
+			stiffness=args.stiffness,
+			baseline_fitter=lambda selected_stiffness: fit_asp_spectrum(
+				data,
+				signal_type=signal_type,
+				baseline_points=args.baseline_points,
+				stiffness=selected_stiffness,
+				fit_ranges=args.fit_range,
+				ignore_ranges=args.ignore_range,
 			),
 		)
 
