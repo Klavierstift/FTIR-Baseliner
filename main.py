@@ -654,7 +654,7 @@ def fit_batch_spectra(
 		except (OSError, ValueError, RuntimeError) as error:
 			failures.append((input_path, str(error)))
 
-	if plot and len(input_paths) > 1 and items:
+	if plot and items:
 		output_paths, review_failures = show_batch_fits(
 			items,
 			stiffness=stiffness,
@@ -672,29 +672,6 @@ def fit_batch_spectra(
 	output_paths = []
 	for item in items:
 		baseline = item["baseline"]
-		if plot:
-			try:
-				baseline, _ = show_fit(
-					item["data"],
-					baseline,
-					item["signal_type"],
-					fit_ranges,
-					ignore_ranges,
-					show_baseline_corrected,
-					display_as,
-					stiffness=stiffness,
-					baseline_fitter=lambda selected_stiffness: fit_asp_spectrum(
-						item["data"],
-						signal_type=item["signal_type"],
-						baseline_points=baseline_points,
-						stiffness=selected_stiffness,
-						fit_ranges=fit_ranges,
-						ignore_ranges=ignore_ranges,
-					),
-				)
-			except (OSError, ValueError, RuntimeError) as error:
-				failures.append((item["input_path"], str(error)))
-				continue
 		try:
 			_write_corrected_spectrum(
 				item["output_path"],
