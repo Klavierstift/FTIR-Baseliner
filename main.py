@@ -326,6 +326,7 @@ def show_batch_fits(
 	show_baseline_corrected,
 	display_as,
 	output_format,
+	output_units,
 ):
 	"""Review multiple spectra in one window and save each on confirmation."""
 	figure, axes = plt.subplots(2 if show_baseline_corrected else 1, 1, sharex=True)
@@ -480,7 +481,12 @@ def show_batch_fits(
 		item = items[index[0]]
 		try:
 			_write_corrected_spectrum(
-				item["output_path"], item["data"], item["baseline"], output_format
+				item["output_path"],
+				item["data"],
+				item["baseline"],
+				output_format,
+				item["signal_type"],
+				output_units,
 			)
 		except (OSError, ValueError) as error:
 			status_text.set_text(f"Save failed: {error}")
@@ -506,8 +512,12 @@ def show_batch_fits(
 	return saved_paths, failures
 
 
-def _write_corrected_spectrum(output_path, data, baseline, output_format):
-	corrected_data = np.column_stack((data[:, 0], data[:, 1] - baseline))
+def _write_corrected_spectrum(
+	output_path, data, baseline, output_format, signal_type, output_units
+):
+	units = signal_type if output_units == "source" else output_units
+	signal, displayed_baseline = _convert_for_display(data, baseline, signal_type, units)
+	corrected_data = np.column_stack((data[:, 0], signal - displayed_baseline))
 	if output_format == "asp":
 		ASP_Writer(output_path).write(corrected_data)
 	else:
@@ -515,7 +525,7 @@ def _write_corrected_spectrum(output_path, data, baseline, output_format):
 			output_path,
 			corrected_data,
 			delimiter=",",
-			header="wavenumber,baseline_corrected_signal",
+			header=f"wavenumber,baseline_corrected_{units}",
 			comments="",
 		)
 
@@ -573,6 +583,7 @@ def fit_batch_spectra(
 	plot=True,
 	show_baseline_corrected=True,
 	display_as="source",
+	output_units="source",
 ):
 	"""Fit baselines and save corrected spectra for multiple ASP or CSV files.
 
@@ -584,6 +595,8 @@ def fit_batch_spectra(
 		raise ValueError("At least one input file is required")
 	if output_format not in ("asp", "csv"):
 		raise ValueError("output_format must be 'asp' or 'csv'")
+	if output_units not in ("source", "absorbance", "transmittance"):
+		raise ValueError("output_units must be 'source', 'absorbance', or 'transmittance'")
 	if output_path is not None and (len(input_paths) != 1 or output_dir is not None):
 		raise ValueError("--output can only be used with one input and without --output-dir")
 	if output_dir is not None:
@@ -626,6 +639,8 @@ def fit_batch_spectra(
 			if plot:
 				display_units = resolved_signal_type if display_as == "source" else display_as
 				_convert_for_display(data, baseline, resolved_signal_type, display_units)
+			save_units = resolved_signal_type if output_units == "source" else output_units
+			_convert_for_display(data, baseline, resolved_signal_type, save_units)
 			items.append(
 				{
 					"input_path": input_path,
@@ -649,6 +664,7 @@ def fit_batch_spectra(
 			show_baseline_corrected=show_baseline_corrected,
 			display_as=display_as,
 			output_format=output_format,
+			output_units=output_units,
 		)
 		failures.extend(review_failures)
 		return output_paths, failures
@@ -681,7 +697,12 @@ def fit_batch_spectra(
 				continue
 		try:
 			_write_corrected_spectrum(
-				item["output_path"], item["data"], baseline, output_format
+				item["output_path"],
+				item["data"],
+				baseline,
+				output_format,
+				item["signal_type"],
+				output_units,
 			)
 			output_paths.append(item["output_path"])
 		except (OSError, ValueError) as error:
@@ -755,6 +776,12 @@ def main(argv=None):
 		help="Corrected spectrum format (default: asp)",
 	)
 	parser.add_argument(
+		"--output-units",
+		choices=("source", "absorbance", "transmittance"),
+		default="source",
+		help="Units for saved corrected spectra (default: source)",
+	)
+	parser.add_argument(
 		"--plot",
 		action=argparse.BooleanOptionalAction,
 		default=True,
@@ -797,6 +824,7 @@ def main(argv=None):
 			plot=args.plot,
 			show_baseline_corrected=args.show_baseline_corrected,
 			display_as=args.display_as,
+			output_units=args.output_units,
 		)
 	except (OSError, ValueError) as error:
 		parser.error(str(error))
