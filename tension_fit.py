@@ -1,7 +1,38 @@
 """Fit smooth FTIR baselines using a constrained cloth optimizer."""
 
 import numpy as np
-from scipy.optimize import minimize
+from scipy.sparse import csr_matrix, diags, identity
+from scipy.sparse.linalg import spsolve
+
+
+def _minimize_bounded_quadratic(hessian, linear, upper, max_iter=1000, tol=1e-10):
+	"""Minimize 0.5 x'Hx - linear'x over 0 <= x <= upper with projected Newton steps."""
+	x = np.zeros_like(upper)
+	tol = max(tol, 1e-13 * float(hessian.diagonal().max()))
+	for _ in range(max_iter):
+		gradient = hessian @ x - linear
+		if np.max(np.abs(np.clip(x - gradient, 0, upper) - x)) <= tol:
+			return x
+		lower_active = (x <= 0) & (gradient >= 0)
+		upper_active = (x >= upper) & (gradient <= 0)
+		free = np.flatnonzero(~(lower_active | upper_active))
+		step = np.zeros_like(x)
+		if free.size:
+			reduced = hessian[free][:, free]
+			ridge = 1e-12 * max(float(reduced.diagonal().max()), 1e-300)
+			step[free] = spsolve(reduced + ridge * identity(free.size, format="csr"), -gradient[free])
+		current = 0.5 * x @ (hessian @ x) - linear @ x
+		scale = 1.0
+		while True:
+			candidate = np.clip(x + scale * step, 0, upper)
+			candidate_value = 0.5 * candidate @ (hessian @ candidate) - linear @ candidate
+			if candidate_value <= current + 1e-4 * (gradient @ (candidate - x)) or scale < 1e-12:
+				break
+			scale *= 0.5
+		if scale < 1e-12:
+			break
+		x = candidate
+	raise RuntimeError("Cloth baseline fit did not converge")
 
 
 def _split_spectrum_input(wavenumbers, spectrum):
@@ -63,31 +94,13 @@ def fit_baseline_cloth(
 	area_weights[-1] = intervals[-1] / 2
 	area_weights[1:-1] = (intervals[:-1] + intervals[1:]) / 2
 
-	def objective(cloth):
-		curvature = (
-			curvature_left * cloth[:-2]
-			+ curvature_middle * cloth[1:-1]
-			+ curvature_right * cloth[2:]
-		)
-		weighted_curvature = curvature_weights * curvature
-		gradient = -area_weights.copy()
-		gradient[:-2] += stiffness * curvature_left * weighted_curvature
-		gradient[1:-1] += stiffness * curvature_middle * weighted_curvature
-		gradient[2:] += stiffness * curvature_right * weighted_curvature
-		energy = 0.5 * stiffness * np.dot(curvature_weights, curvature**2)
-		energy -= np.dot(area_weights, cloth)
-		return energy, gradient
-
-	result = minimize(
-		objective,
-		x0=np.zeros_like(values),
-		method="L-BFGS-B",
-		jac=True,
-		bounds=list(zip(np.zeros_like(values), values)),
-		options={"maxiter": 1000, "ftol": 1e-11, "gtol": 1e-8},
-	)
-	if not result.success and result.status != 1:
-		raise RuntimeError(f"Cloth baseline fit failed: {result.message}")
-	baseline = data_minimum + signal_amplitude * result.x
+	count = len(values) - 2
+	rows = np.repeat(np.arange(count), 3)
+	columns = np.column_stack((np.arange(count), np.arange(count) + 1, np.arange(count) + 2)).ravel()
+	coefficients = np.column_stack((curvature_left, curvature_middle, curvature_right)).ravel()
+	second_difference = csr_matrix((coefficients, (rows, columns)), shape=(count, len(values)))
+	hessian = stiffness * (second_difference.T @ diags(curvature_weights) @ second_difference).tocsr()
+	cloth = _minimize_bounded_quadratic(hessian, area_weights, values)
+	baseline = data_minimum + signal_amplitude * cloth
 	return baseline[::-1].copy() if descending else baseline
 
