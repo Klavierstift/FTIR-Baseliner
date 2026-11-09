@@ -479,7 +479,9 @@ def show_batch_fits(
 	def save_and_advance(_event):
 		item = items[index[0]]
 		try:
-			_write_baseline(item["output_path"], item["data"], item["baseline"], output_format)
+			_write_corrected_spectrum(
+				item["output_path"], item["data"], item["baseline"], output_format
+			)
 		except (OSError, ValueError) as error:
 			status_text.set_text(f"Save failed: {error}")
 			figure.canvas.draw_idle()
@@ -504,16 +506,16 @@ def show_batch_fits(
 	return saved_paths, failures
 
 
-def _write_baseline(output_path, data, baseline, output_format):
-	baseline_data = np.column_stack((data[:, 0], baseline))
+def _write_corrected_spectrum(output_path, data, baseline, output_format):
+	corrected_data = np.column_stack((data[:, 0], data[:, 1] - baseline))
 	if output_format == "asp":
-		ASP_Writer(output_path).write(baseline_data)
+		ASP_Writer(output_path).write(corrected_data)
 	else:
 		np.savetxt(
 			output_path,
-			baseline_data,
+			corrected_data,
 			delimiter=",",
-			header="wavenumber,baseline",
+			header="wavenumber,baseline_corrected_signal",
 			comments="",
 		)
 
@@ -572,7 +574,7 @@ def fit_batch_spectra(
 	show_baseline_corrected=True,
 	display_as="source",
 ):
-	"""Fit and save baselines for multiple ASP or CSV files.
+	"""Fit baselines and save corrected spectra for multiple ASP or CSV files.
 
 	Returns (output_paths, failures), where failures contains (input_path, error)
 	pairs for files that could not be processed.
@@ -587,7 +589,10 @@ def fit_batch_spectra(
 	if output_dir is not None:
 		output_dir = Path(output_dir)
 		output_dir.mkdir(parents=True, exist_ok=True)
-		output_names = [f"{path.stem}_baseline.{output_format}".casefold() for path in input_paths]
+		output_names = [
+			f"{path.stem}_corrected.{output_format}".casefold()
+			for path in input_paths
+		]
 		if len(set(output_names)) != len(output_names):
 			raise ValueError("Batch inputs have duplicate filenames; use separate input directories")
 
@@ -611,10 +616,12 @@ def fit_batch_spectra(
 			if output_path is not None:
 				current_output_path = Path(output_path)
 			elif output_dir is not None:
-				current_output_path = output_dir / f"{input_path.stem}_baseline.{output_format}"
+				current_output_path = (
+					output_dir / f"{input_path.stem}_corrected.{output_format}"
+				)
 			else:
 				current_output_path = input_path.with_name(
-					f"{input_path.stem}_baseline.{output_format}"
+					f"{input_path.stem}_corrected.{output_format}"
 				)
 			if plot:
 				display_units = resolved_signal_type if display_as == "source" else display_as
@@ -673,7 +680,9 @@ def fit_batch_spectra(
 				failures.append((item["input_path"], str(error)))
 				continue
 		try:
-			_write_baseline(item["output_path"], item["data"], baseline, output_format)
+			_write_corrected_spectrum(
+				item["output_path"], item["data"], baseline, output_format
+			)
 			output_paths.append(item["output_path"])
 		except (OSError, ValueError) as error:
 			failures.append((item["input_path"], str(error)))
@@ -737,13 +746,13 @@ def main(argv=None):
 	parser.add_argument(
 		"--output-dir",
 		type=Path,
-		help="Directory for batch baseline outputs (defaults to each input's directory)",
+		help="Directory for batch corrected spectra (defaults to each input's directory)",
 	)
 	parser.add_argument(
 		"--output-format",
 		choices=("csv", "asp"),
 		default="asp",
-		help="Fitted baseline format (default: asp)",
+		help="Corrected spectrum format (default: asp)",
 	)
 	parser.add_argument(
 		"--plot",
@@ -792,7 +801,7 @@ def main(argv=None):
 	except (OSError, ValueError) as error:
 		parser.error(str(error))
 	for output_path in output_paths:
-		print(f"Baseline fit saved to {output_path}")
+		print(f"Baseline-corrected spectrum saved to {output_path}")
 	for input_path, error in failures:
 		print(f"Failed to process {input_path}: {error}", file=sys.stderr)
 	return 1 if failures else 0

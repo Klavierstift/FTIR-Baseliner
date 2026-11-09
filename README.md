@@ -1,6 +1,6 @@
 # FTIR Baseliner
 
-FTIR Baseliner reads a spectrum, estimates a smooth baseline with a constrained cloth-fitting algorithm, and saves the baseline at the original spectrum's wavenumber points. During fitting, the baseline is constrained below the transformed signal; for absorbance this is below the measured spectrum, while for transmittance the reported baseline is above the measured `%T` spectrum. The fit balances raising its area against a curvature penalty, and `--stiffness` controls how strongly it resists bending.
+FTIR Baseliner reads a spectrum, estimates a smooth baseline with a constrained cloth-fitting algorithm, subtracts that baseline from the measured signal, and saves the baseline-corrected spectrum at the original wavenumber points. During fitting, the baseline is constrained below the transformed signal; for absorbance this is below the measured spectrum, while for transmittance the reported baseline is above the measured `%T` spectrum. The fit balances raising its area against a curvature penalty, and `--stiffness` controls how strongly it resists bending.
 
 ## Requirements
 
@@ -25,9 +25,9 @@ python main.py samples/ABS-1.csv
 python main.py samples/ABS-1.csv samples/ABS-2.csv --no-plot --output-dir results
 ```
 
-The plot opens by default with the measured spectrum, baseline, and baseline-corrected spectrum. For cloth fits, adjust stiffness with the logarithmic slider or enter a positive value in the numeric field. In a multi-file run, one window stays open while files are reviewed. Click **Save / Next** to save the current baseline and show the next file; the final button is **Save / Done**. Closing the window early leaves unconfirmed files unsaved and reports them. Use `--no-plot` for unattended batch processing.
+The plot opens by default with the measured spectrum, baseline, and baseline-corrected spectrum. For cloth fits, adjust stiffness with the logarithmic slider or enter a positive value in the numeric field. The selected fit is applied when the corrected spectrum is saved after the plot closes. In a multi-file run, one window stays open while files are reviewed. Click **Save / Next** to save the current corrected spectrum and show the next file; the final button is **Save / Done**. Closing the window early leaves unconfirmed files unsaved and reports them. Use `--no-plot` for unattended batch processing.
 
-By default, each baseline is saved beside its input as `<input-name>_baseline.asp`. Use `--output` to choose a different path for a single input, or `--output-dir` to put batch outputs in one directory. Use `--output-format csv` to save two-column CSV files instead.
+By default, each corrected spectrum is saved beside its input as `<input-name>_corrected.asp`. The saved intensity is `measured signal - baseline` in the input's source units; `--display-as` changes the plot only. Use `--output` to choose a different path for a single input, or `--output-dir` to put batch outputs in one directory. Use `--output-format csv` to save two-column CSV files instead.
 
 ## Input Formats
 
@@ -43,7 +43,7 @@ Signal type is detected from CSV unit headers such as `%T` or `A`. For unlabeled
 3. **Choose the fitting points.** `--fit-range` selects the wavenumber intervals that contribute to fitting; repeated ranges are combined. `--ignore-range` removes its intervals from fitting as well. If the spectrum is larger than `--baseline-points`, the program places coarse knots across the selected data and uses segment minima to form a conservative envelope for the cloth fit.
 4. **Fit the cloth.** The optimizer raises a smooth baseline toward the spectrum without crossing its envelope. It maximizes baseline area while penalizing curvature, using bounded L-BFGS-B optimization. `--stiffness` sets the curvature penalty: smaller values allow more bending and can follow broader background changes, while larger values favor a smoother, flatter line.
 5. **Restore full resolution.** The coarse baseline is linearly interpolated to every original wavenumber. For ignored intervals, the program replaces the interpolated section with a cubic Hermite bridge between the fitted values at its boundaries, limiting endpoint slopes to avoid sharp transitions.
-6. **Review and save.** The plot can show the spectrum and baseline in source units or convert both for display as absorbance or transmittance. Display conversion does not change the saved fit. In batch review, the same window advances through spectra; **Save / Next** writes the current baseline, and **Save / Done** writes the last one. Closing early leaves remaining spectra unsaved.
+6. **Review and save.** The plot can show the spectrum and baseline in source units or convert both for display as absorbance or transmittance. Display conversion does not change the saved corrected spectrum, which stays in the input's source units. In batch review, the same window advances through spectra; **Save / Next** writes the current corrected spectrum, and **Save / Done** writes the last one. Closing early leaves remaining spectra unsaved.
 
 ### Cloth Optimization Details
 
@@ -74,12 +74,12 @@ Consequently, a smaller stiffness allows the baseline to bend more and follow br
 | `--stiffness VALUE` | Cloth curvature resistance; default is `9e-5`. Lower values allow more bending; higher values produce a smoother baseline. |
 | `--baseline-points COUNT` | Number of coarse baseline points; default is `226`. |
 | `--signal-type TYPE` | `auto`, `absorbance`, or `transmittance`; default is `auto`. |
-| `--display-as UNITS` | Plot in `source`, `absorbance`, or `transmittance` units; default is `source`. Conversion affects the plot only, not the saved baseline. |
+| `--display-as UNITS` | Plot in `source`, `absorbance`, or `transmittance` units; default is `source`. Conversion affects the plot only; the corrected output remains in source units. |
 | `--fit-range MIN MAX` | Restrict baseline fitting to this wavenumber range. Repeat to specify multiple ranges. |
 | `--ignore-range MIN MAX` | Exclude this range from fitting and smoothly bridge the baseline across it. Repeat for multiple ranges. |
 | `--no-plot` | Disable plotting. Plotting is on by default. |
 | `--no-show-baseline-corrected` | Hide the baseline-corrected panel while keeping the main plot. It is shown by default. |
-| `--output PATH` | Set the baseline output path. |
+| `--output PATH` | Set the corrected-spectrum output path for a single input. |
 | `--output-dir PATH` | Set the directory for outputs from a batch run. |
 | `--output-format FORMAT` | Choose `asp` or `csv`; default is `asp`. |
 | `-h`, `--help` | Show all command-line options. |
