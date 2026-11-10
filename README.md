@@ -27,7 +27,7 @@ python main.py samples/ABS-1.csv samples/ABS-2.csv --no-plot --output-dir result
 
 The plot opens by default with the measured spectrum, baseline, and baseline-corrected spectrum. For cloth fits, adjust stiffness with the logarithmic slider or enter a positive value in the numeric field. The selected fit is applied when the corrected spectrum is saved after the plot closes. In a multi-file run, one window stays open while files are reviewed. Click **Save / Next** to save the current corrected spectrum and show the next file; the final button is **Save / Done**. Drag across the top plot to ignore a wavenumber range for the current spectrum; it refits immediately. Right-click inside an ignored range to remove only that range. **Clear ignored** removes all of that spectrum's ignored ranges. Closing the window early leaves unconfirmed files unsaved and reports them. Use `--no-plot` for unattended batch processing.
 
-By default, each corrected spectrum is saved beside its input as `<input-name>_corrected.asp`. The saved intensity is `measured signal - baseline` in the input's source units; `--display-as` changes the plot only, and `--output-units` changes the saved units. Use `--output` to choose a different path for a single input, or `--output-dir` to put batch outputs in one directory. Use `--output-format csv` to save two-column CSV files instead.
+By default, each corrected spectrum is saved beside its input as `<input-name>_corrected.asp`. The saved intensity is `measured signal - baseline` in the input's source units; `--display-as` changes the plot only, and `--output-units` changes the saved units. Use `--output` to choose a different path for a single input; its `.asp` or `.csv` extension sets the format. Use `--output-dir` to put batch outputs in one directory, and `--output-format csv` to save two-column CSV files by default.
 
 ## Input Formats
 
@@ -133,9 +133,9 @@ The slider changes $\lambda$ on a logarithmic scale because useful stiffness val
 | `--ignore-range MIN MAX` | Exclude this range from fitting and smoothly bridge the baseline across it. Repeat for multiple ranges. |
 | `--no-plot` | Disable plotting. Plotting is on by default. |
 | `--no-show-baseline-corrected` | Hide the baseline-corrected panel while keeping the main plot. It is shown by default. |
-| `--output PATH` | Set the corrected-spectrum output path for a single input. |
+| `--output PATH` | Set the corrected-spectrum output path for a single input. Its `.asp` or `.csv` extension sets the output format. |
 | `--output-dir PATH` | Set the directory for outputs from a batch run. |
-| `--output-format FORMAT` | Choose `asp` or `csv`; default is `asp`. |
+| `--output-format FORMAT` | Choose `asp` or `csv`; default is `asp`, or the `--output` extension when given. It must match that extension if both are set. |
 | `--output-units UNITS` | Save the corrected spectrum in `source`, `absorbance`, or `transmittance` units; default is `source`. Transmittance-to-absorbance conversion requires positive values. |
 | `-h`, `--help` | Show all command-line options. |
 

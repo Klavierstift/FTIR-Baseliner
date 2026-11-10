@@ -658,7 +658,7 @@ def _choose_input_files():
 def fit_batch_spectra(
 	input_paths,
 	*,
-	output_format="asp",
+	output_format=None,
 	output_dir=None,
 	output_path=None,
 	stiffness=9e-5,
@@ -680,8 +680,19 @@ def fit_batch_spectra(
 	input_paths = [Path(path) for path in input_paths]
 	if not input_paths:
 		raise ValueError("At least one input file is required")
-	if output_format not in ("asp", "csv"):
+	if output_format is not None and output_format not in ("asp", "csv"):
 		raise ValueError("output_format must be 'asp' or 'csv'")
+	if output_path is not None:
+		path_format = Path(output_path).suffix.lower().lstrip(".")
+		if path_format not in ("asp", "csv"):
+			raise ValueError("--output must end in .asp or .csv")
+		if output_format is not None and output_format != path_format:
+			raise ValueError(
+				f"--output ends in .{path_format} but output_format is {output_format}"
+			)
+		output_format = path_format
+	elif output_format is None:
+		output_format = "asp"
 	if output_units not in ("source", "absorbance", "transmittance"):
 		raise ValueError("output_units must be 'source', 'absorbance', or 'transmittance'")
 	if output_path is not None and (len(input_paths) != 1 or output_dir is not None):
@@ -835,7 +846,7 @@ def main(argv=None):
 	parser.add_argument(
 		"--output",
 		type=Path,
-		help="Output path for a single input file",
+		help="Output path for a single input file; its .asp or .csv extension sets the format",
 	)
 	parser.add_argument(
 		"--output-dir",
@@ -845,8 +856,8 @@ def main(argv=None):
 	parser.add_argument(
 		"--output-format",
 		choices=("csv", "asp"),
-		default="asp",
-		help="Corrected spectrum format (default: asp)",
+		default=None,
+		help="Corrected spectrum format (default: asp, or the --output extension)",
 	)
 	parser.add_argument(
 		"--output-units",
