@@ -1,6 +1,7 @@
 """Fit smooth FTIR baselines using a constrained cloth optimizer."""
 
 import numpy as np
+from scipy.optimize import minimize
 from scipy.sparse import csr_matrix, diags, identity
 from scipy.sparse.linalg import spsolve
 
@@ -40,6 +41,25 @@ def _minimize_bounded_quadratic(hessian, linear, upper, max_iter=1000, tol=1e-10
 	raise RuntimeError("Cloth baseline fit did not converge")
 
 
+def _minimize_lbfgsb(hessian, linear, upper):
+	"""Minimize the same bounded quadratic with SciPy's L-BFGS-B."""
+	def objective(x):
+		hx = hessian @ x
+		return 0.5 * x @ hx - linear @ x, hx - linear
+
+	result = minimize(
+		objective,
+		x0=np.zeros_like(upper),
+		method="L-BFGS-B",
+		jac=True,
+		bounds=list(zip(np.zeros_like(upper), upper)),
+		options={"maxiter": 1000, "ftol": 1e-11, "gtol": 1e-8},
+	)
+	if not result.success and result.status != 1:
+		raise RuntimeError(f"Cloth baseline fit failed: {result.message}")
+	return result.x
+
+
 def _split_spectrum_input(wavenumbers, spectrum):
 	if spectrum is None:
 		data = np.asarray(wavenumbers, dtype=float)
@@ -50,7 +70,7 @@ def _split_spectrum_input(wavenumbers, spectrum):
 
 
 def fit_baseline_cloth(
-	wavenumbers, spectrum=None, stiffness=1e-5, signal_amplitude=None
+	wavenumbers, spectrum=None, stiffness=1e-5, signal_amplitude=None, solver="newton"
 ):
 	"""Fit a smooth baseline by pushing a flexible cloth up against the data.
 
@@ -66,6 +86,8 @@ def fit_baseline_cloth(
 		raise ValueError("Wavenumbers and spectrum must contain only finite values.")
 	if not np.isfinite(stiffness) or stiffness <= 0:
 		raise ValueError("stiffness must be finite and greater than zero")
+	if solver not in ("newton", "lbfgsb"):
+		raise ValueError("solver must be 'newton' or 'lbfgsb'")
 
 	differences = np.diff(x)
 	descending = bool(np.all(differences < 0))
@@ -110,7 +132,10 @@ def fit_baseline_cloth(
 	coefficients = np.column_stack((curvature_left, curvature_middle, curvature_right)).ravel()
 	second_difference = csr_matrix((coefficients, (rows, columns)), shape=(count, len(values)))
 	hessian = stiffness * (second_difference.T @ diags(curvature_weights) @ second_difference).tocsr()
-	cloth = _minimize_bounded_quadratic(hessian, area_weights, values)
+	if solver == "newton":
+		cloth = _minimize_bounded_quadratic(hessian, area_weights, values)
+	else:
+		cloth = _minimize_lbfgsb(hessian, area_weights, values)
 	baseline = data_minimum + signal_amplitude * cloth
 	return baseline[::-1].copy() if descending else baseline
 

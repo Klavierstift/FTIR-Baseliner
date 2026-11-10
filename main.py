@@ -26,6 +26,7 @@ def fit_asp_spectrum(
 	stiffness=1e-5,
 	fit_ranges=None,
 	ignore_ranges=None,
+	solver="newton",
 ):
 	"""Return a baseline for two-column wavenumber/intensity data."""
 	data = np.asarray(data, dtype=float)
@@ -84,6 +85,7 @@ def fit_asp_spectrum(
 		coarse_data,
 		stiffness=stiffness,
 		signal_amplitude=np.ptp(selected_data[:, 1]),
+		solver=solver,
 	)
 	# np.interp needs ascending x; the knots may not be sorted.
 	order = np.argsort(coarse_data[:, 0])
@@ -337,6 +339,7 @@ def show_batch_fits(
 	stiffness,
 	baseline_points,
 	fit_ranges,
+	solver,
 	show_baseline_corrected,
 	display_as,
 	output_format,
@@ -473,6 +476,7 @@ def show_batch_fits(
 				stiffness=new_stiffness,
 				fit_ranges=fit_ranges,
 				ignore_ranges=new_ignore_ranges,
+				solver=solver,
 			)
 			display_units = item["signal_type"] if display_as == "source" else display_as
 			# Checks that the result can be displayed; failures show as a fit error.
@@ -666,6 +670,7 @@ def fit_batch_spectra(
 	show_baseline_corrected=True,
 	display_as="source",
 	output_units="source",
+	solver="newton",
 ):
 	"""Fit baselines and save corrected spectra for multiple ASP or CSV files.
 
@@ -707,6 +712,7 @@ def fit_batch_spectra(
 				stiffness=stiffness,
 				fit_ranges=fit_ranges,
 				ignore_ranges=ignore_ranges,
+				solver=solver,
 			)
 			if output_path is not None:
 				current_output_path = Path(output_path)
@@ -744,6 +750,7 @@ def fit_batch_spectra(
 			stiffness=stiffness,
 			baseline_points=baseline_points,
 			fit_ranges=fit_ranges,
+			solver=solver,
 			show_baseline_corrected=show_baseline_corrected,
 			display_as=display_as,
 			output_format=output_format,
@@ -784,6 +791,12 @@ def main(argv=None):
 		type=float,
 		default=9e-5,
 		help="Cloth curvature resistance (default: 9e-5)",
+	)
+	parser.add_argument(
+		"--solver",
+		choices=("newton", "lbfgsb"),
+		default="newton",
+		help="Optimizer: projected Newton (default) or the older L-BFGS-B",
 	)
 	parser.add_argument(
 		"--baseline-points",
@@ -878,6 +891,7 @@ def main(argv=None):
 			output_dir=args.output_dir,
 			output_path=args.output,
 			stiffness=args.stiffness,
+			solver=args.solver,
 			baseline_points=args.baseline_points,
 			signal_type=args.signal_type,
 			fit_ranges=args.fit_range,

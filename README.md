@@ -41,7 +41,7 @@ Signal type is detected from CSV unit headers such as `%T` or `A`. For unlabeled
 1. **Read the spectrum.** ASP files provide a point count and the endpoints of a linear wavenumber axis, followed by intensity values. CSV loading skips metadata and column labels until it reaches two-column numeric spectrum data. The input rows and their order are retained for the final output.
 2. **Determine the signal orientation.** Absorbance peaks point upward, while transmittance absorption bands appear as downward dips. For fitting, transmittance intensities are sign-inverted so both signal types can use the same lower-envelope algorithm. The baseline is inverted back afterward, placing it below absorbance peaks or above the measured `%T` signal.
 3. **Choose the fitting points.** `--fit-range` selects the wavenumber intervals that contribute to fitting; repeated ranges are combined. `--ignore-range` removes its intervals from fitting as well. A knot is a coarse point where the optimizer solves for one baseline value; the baseline between knots is interpolated. If the spectrum is larger than `--baseline-points`, the program places evenly spaced knots across the selected data. Each knot's ceiling is the lower of the minima of its two adjacent segments, so the cloth cannot cross the signal between knots. The [Cloth Optimization Details](#cloth-optimization-details) section explains the fit.
-4. **Fit the cloth.** The optimizer raises a smooth baseline toward the spectrum without crossing its envelope. It maximizes baseline area while penalizing curvature, using a bounded projected Newton solver with an exact sparse Hessian. `--stiffness` sets the curvature penalty: smaller values allow more bending and can follow broader background changes, while larger values favor a smoother, flatter line.
+4. **Fit the cloth.** The optimizer raises a smooth baseline toward the spectrum without crossing its envelope. It maximizes baseline area while penalizing curvature, using a bounded projected Newton solver with an exact sparse Hessian (`--solver lbfgsb` selects the older L-BFGS-B method). `--stiffness` sets the curvature penalty: smaller values allow more bending and can follow broader background changes, while larger values favor a smoother, flatter line.
 5. **Restore full resolution.** The coarse baseline is linearly interpolated to every original wavenumber. For ignored intervals, the program replaces the interpolated section with a cubic Hermite bridge between the fitted values at its boundaries, limiting endpoint slopes to avoid sharp transitions.
 6. **Review and save.** The plot can show the spectrum and baseline in source units or convert both for display as absorbance or transmittance. Display conversion does not change the saved corrected spectrum. The saved spectrum is in the input's source units unless `--output-units` is set; in that case both the spectrum and baseline are converted before subtracting, so the saved values match the corrected residual in the chosen units. In batch review, the same window advances through spectra; **Save / Next** writes the current corrected spectrum, and **Save / Done** writes the last one. Closing early leaves remaining spectra unsaved.
 
@@ -106,9 +106,11 @@ The solver starts at $b = 0$, which is feasible because $0$ is the lowest bound.
 
 Because the energy is quadratic, an unconstrained Newton step would be exact. The bounds make the method iterative, and the solver allows up to 1000 iterations.
 
+The `--solver lbfgsb` option minimizes the same bounded energy with SciPy's L-BFGS-B method, using the gradient $Hb - a$ and the same bounds. It is kept for comparison. Earlier tests showed it could return flat baselines because of false convergence, so projected Newton is the default.
+
 #### 5. Convergence
 
-If the iteration limit is reached or the line search stalls before the stopping test passes, the fit raises `RuntimeError("Cloth baseline fit did not converge")`. The optimizer never returns an unconverged baseline. Batch runs record this as a failure for that file.
+If the iteration limit is reached or the line search stalls before the stopping test passes, the fit raises `RuntimeError("Cloth baseline fit did not converge")`. The projected Newton solver never returns an unconverged baseline. With `--solver lbfgsb`, reaching the 1000-iteration limit does not raise, so that result may be unconverged; other failures raise `RuntimeError("Cloth baseline fit failed: ...")`. Batch runs record errors as failures for that file.
 
 #### 6. Effect of Stiffness
 
@@ -124,6 +126,7 @@ The slider changes $\lambda$ on a logarithmic scale because useful stiffness val
 | --- | --- |
 | `--stiffness VALUE` | Cloth curvature resistance; default is `9e-5`. Lower values allow more bending; higher values produce a smoother baseline. |
 | `--baseline-points COUNT` | Number of coarse baseline points; default is `226`. |
+| `--solver SOLVER` | `newton` (projected Newton) or `lbfgsb` (older L-BFGS-B); default is `newton`. |
 | `--signal-type TYPE` | `auto`, `absorbance`, or `transmittance`; default is `auto`. |
 | `--display-as UNITS` | Plot in `source`, `absorbance`, or `transmittance` units; default is `source`. Conversion affects the plot only. |
 | `--fit-range MIN MAX` | Restrict baseline fitting to this wavenumber range. Repeat to specify multiple ranges. |
@@ -151,6 +154,9 @@ python main.py samples/ABS-1.csv --no-plot --output-units transmittance --output
 # Fit only the specified regions and skip the range between them
 python main.py samples/ABS-1.csv --fit-range 650 1800 --fit-range 2800 4000 --ignore-range 1800 2800
 
+# Compare against the older L-BFGS-B solver
+python main.py samples/ABS-1.csv --no-plot --solver lbfgsb
+
 # Process several files without opening an individual plot for each
 python main.py samples/ABS-1.csv samples/ABS-2.csv --no-plot --output-dir results
 ```
@@ -169,7 +175,7 @@ baseline = fit_asp_spectrum(
 )
 ```
 
-`baseline` is a one-dimensional NumPy array aligned with the input rows. The fitter is cloth-only; the previous rotation-based fitter is no longer included.
+`baseline` is a one-dimensional NumPy array aligned with the input rows. Pass `solver="lbfgsb"` to use the L-BFGS-B method; the default is `solver="newton"`. The fitter is cloth-only; the previous rotation-based fitter is no longer included.
 
 For multiple input files, use `fit_batch_spectra()`. It returns `(output_paths, failures)`, where each failure contains the input path and an error message:
 
