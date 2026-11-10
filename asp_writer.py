@@ -18,6 +18,7 @@ class ASP_Writer:
 		steps = np.diff(wavenumbers)
 		if not (np.all(steps > 0) or np.all(steps < 0)):
 			raise ValueError("ASP wavenumbers must be strictly monotonic")
+		# The ASP header stores only start and end, so spacing must be uniform.
 		if not np.allclose(steps, steps[0], rtol=1e-5, atol=1e-8):
 			raise ValueError("ASP format requires evenly spaced wavenumbers")
 

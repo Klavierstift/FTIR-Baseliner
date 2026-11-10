@@ -40,32 +40,83 @@ Signal type is detected from CSV unit headers such as `%T` or `A`. For unlabeled
 
 1. **Read the spectrum.** ASP files provide a point count and the endpoints of a linear wavenumber axis, followed by intensity values. CSV loading skips metadata and column labels until it reaches two-column numeric spectrum data. The input rows and their order are retained for the final output.
 2. **Determine the signal orientation.** Absorbance peaks point upward, while transmittance absorption bands appear as downward dips. For fitting, transmittance intensities are sign-inverted so both signal types can use the same lower-envelope algorithm. The baseline is inverted back afterward, placing it below absorbance peaks or above the measured `%T` signal.
-3. **Choose the fitting points.** `--fit-range` selects the wavenumber intervals that contribute to fitting; repeated ranges are combined. `--ignore-range` removes its intervals from fitting as well. If the spectrum is larger than `--baseline-points`, the program places coarse knots across the selected data and uses segment minima to form a conservative envelope for the cloth fit.
+3. **Choose the fitting points.** `--fit-range` selects the wavenumber intervals that contribute to fitting; repeated ranges are combined. `--ignore-range` removes its intervals from fitting as well. A knot is a coarse point where the optimizer solves for one baseline value; the baseline between knots is interpolated. If the spectrum is larger than `--baseline-points`, the program places evenly spaced knots across the selected data. Each knot's ceiling is the lower of the minima of its two adjacent segments, so the cloth cannot cross the signal between knots. The [Cloth Optimization Details](#cloth-optimization-details) section explains the fit.
 4. **Fit the cloth.** The optimizer raises a smooth baseline toward the spectrum without crossing its envelope. It maximizes baseline area while penalizing curvature, using a bounded projected Newton solver with an exact sparse Hessian. `--stiffness` sets the curvature penalty: smaller values allow more bending and can follow broader background changes, while larger values favor a smoother, flatter line.
 5. **Restore full resolution.** The coarse baseline is linearly interpolated to every original wavenumber. For ignored intervals, the program replaces the interpolated section with a cubic Hermite bridge between the fitted values at its boundaries, limiting endpoint slopes to avoid sharp transitions.
 6. **Review and save.** The plot can show the spectrum and baseline in source units or convert both for display as absorbance or transmittance. Display conversion does not change the saved corrected spectrum. The saved spectrum is in the input's source units unless `--output-units` is set; in that case both the spectrum and baseline are converted before subtracting, so the saved values match the corrected residual in the chosen units. In batch review, the same window advances through spectra; **Save / Next** writes the current corrected spectrum, and **Save / Done** writes the last one. Closing early leaves remaining spectra unsaved.
 
 ### Cloth Optimization Details
 
-The cloth is a mathematical analogy, not a physical simulation. The optimizer first scales wavenumbers to the interval `[0, 1]` and shifts/scales intensity values using the signal minimum and amplitude. It then assigns one baseline value, `b`, to each coarse knot.
+The cloth is a mathematical analogy, not a physical simulation. A flexible sheet is pulled upward until it touches the spectrum from below, while its stiffness resists bending. The fit is a bounded quadratic minimization with four stages: build the ceiling, normalize the problem, minimize the energy, and verify convergence.
 
-The baseline values are bounded by the data envelope:
+#### 1. Ceiling Construction
+
+Before the cloth fit, `main.py` builds the ceiling values from the selected points:
+
+- If the selected spectrum has more points than `--baseline-points`, the points are split into segments between evenly spaced knots.
+- Each interior knot takes the lower of the minima of its two adjacent segments. The end knots take the minimum of their single adjacent segment.
+- If the spectrum has no more points than `--baseline-points`, every point is its own knot and its own ceiling.
+
+Because each ceiling is at or below the signal across its span, the cloth stays under the measured data.
+
+#### 2. Normalization
+
+The optimizer maps the wavenumbers to $t_i \in [0, 1]$ and scales the knot ceilings to
+
+$$
+y_j = \frac{c_j - c_{\min}}{\Delta}
+$$
+
+where $c_j$ is the knot ceiling, $c_{\min}$ is the lowest ceiling, and $\Delta$ is the intensity range of the selected data. Normalizing removes the dependence on the wavenumber span and intensity units, so the same `--stiffness` produces comparable behavior across spectra.
+
+Each knot has one baseline value, $b_j$, bounded by the scaled ceiling:
 
 $$
 0 \leq b_j \leq y_j
 $$
 
-Here `y` is the scaled coarse envelope. These bounds prevent the fitted baseline from crossing the signal used for fitting. In transmittance mode, the signal has already been sign-inverted, so converting the result back places the baseline above the measured `%T` trace.
+These bounds prevent the fitted baseline from crossing the signal used for fitting. In transmittance mode, the signal has already been sign-inverted, so converting the result back places the baseline above the measured `%T` trace.
 
-The optimizer minimizes an energy with an area reward and a curvature penalty:
+#### 3. Energy
+
+Let $h_i = t_{i+1} - t_i$ be the knot spacings. The curvature at interior knot $i$ is estimated from knots $i$, $i+1$, and $i+2$, which keeps the estimate correct for uneven spacing:
+
+$$
+\kappa_i(b) = \frac{2}{h_i(h_i+h_{i+1})}\,b_i - \frac{2}{h_i h_{i+1}}\,b_{i+1} + \frac{2}{h_{i+1}(h_i+h_{i+1})}\,b_{i+2}
+$$
+
+The curvature weight is $w_i = (h_i + h_{i+1})/2$. The area weights $a_j$ are trapezoid weights, with each knot receiving half of each adjacent interval. The optimizer minimizes an energy with an area reward and a curvature penalty:
 
 $$
 E(b) = \frac{\lambda}{2}\sum_i w_i\,\kappa_i(b)^2 - \sum_j a_j\,b_j
 $$
 
-`κᵢ(b)` is the local second derivative of the baseline, approximated from three neighboring knots. `wᵢ` and `aⱼ` are spacing-aware weights that account for the knot intervals when measuring curvature and area. The negative area term rewards raising the baseline; the squared-curvature term penalizes bending. `λ` is the stiffness parameter. A projected Newton method minimizes this objective under the bounds above, using the exact Hessian of the quadratic energy. It raises an error instead of returning an unconverged baseline.
+The negative area term rewards raising the baseline, and the squared-curvature term penalizes bending. $\lambda$ is the stiffness. On the normalized axis, this discrete energy approximates $\lambda\int_0^1 b''(t)^2\,dt - \int_0^1 b(t)\,dt$, so changing `--baseline-points` mainly changes resolution rather than the balance set by stiffness.
 
-Consequently, a smaller stiffness allows the baseline to bend more and follow broad changes more closely. A larger stiffness favors a flatter baseline, but may leave a larger gap beneath broad spectral structure. The slider changes `λ` on a logarithmic scale because useful stiffness values span several orders of magnitude.
+The energy is quadratic, so it can be written as $\tfrac{1}{2}b^\top H b - a^\top b$, with the sparse Hessian $H = \lambda D^\top W D$. Here $D$ holds the curvature stencil and $W$ is the diagonal matrix of curvature weights. The gradient is $Hb - a$.
+
+#### 4. Projected Newton Solver
+
+The solver starts at $b = 0$, which is feasible because $0$ is the lowest bound. Each iteration performs these steps:
+
+1. Compute the gradient $g = Hb - a$.
+2. Stop if the projected step is negligible: $\max_j \left|\operatorname{clip}(b_j - g_j,\, 0,\, y_j) - b_j\right| \le \epsilon$, where $\epsilon = \max(10^{-10},\, 10^{-13}\max_j H_{jj})$. The second term keeps the test above gradient roundoff when stiffness is large.
+3. Hold fixed any variable sitting on a bound whose gradient pushes outward (at $0$ with $g \ge 0$, or at $y_j$ with $g \le 0$). Solve the Newton system for the remaining free variables. A tiny ridge keeps this sparse solve stable.
+4. Backtrack along the step: clip to the bounds, then halve the step until the Armijo condition $E(b^+) \le E(b) + 10^{-4}\,g^\top(b^+ - b)$ holds. If the step falls below $10^{-12}$, the search ends.
+
+Because the energy is quadratic, an unconstrained Newton step would be exact. The bounds make the method iterative, and the solver allows up to 1000 iterations.
+
+#### 5. Convergence
+
+If the iteration limit is reached or the line search stalls before the stopping test passes, the fit raises `RuntimeError("Cloth baseline fit did not converge")`. The optimizer never returns an unconverged baseline. Batch runs record this as a failure for that file.
+
+#### 6. Effect of Stiffness
+
+- Very small $\lambda$: the curvature penalty is negligible, so the cloth rises to the ceiling at almost every knot and follows narrow structure closely.
+- Moderate $\lambda$: the cloth bends to follow broad background changes while staying under the signal.
+- Large $\lambda$: curvature is nearly zero, so the baseline approaches a straight line beneath the signal and may leave a larger gap under broad structure.
+
+The slider changes $\lambda$ on a logarithmic scale because useful stiffness values span several orders of magnitude. The default is `9e-5`.
 
 ## Options
 

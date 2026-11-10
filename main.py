@@ -39,6 +39,7 @@ def fit_asp_spectrum(
 		invert_baseline = False
 	elif signal_type == "transmittance":
 		fit_data = data.copy()
+		# Negate so absorption bands point upward; undone on return.
 		fit_data[:, 1] *= -1
 		invert_baseline = True
 	else:
@@ -70,21 +71,25 @@ def fit_asp_spectrum(
 			],
 			dtype=float,
 		)
+		# Knot ceilings: the lowest point in the segments touching each knot.
 		caps = np.empty(len(indices), dtype=float)
 		caps[0] = segment_minima[0]
 		caps[-1] = segment_minima[-1]
 		caps[1:-1] = np.minimum(segment_minima[:-1], segment_minima[1:])
 		coarse_data = np.column_stack((selected_data[indices, 0], caps))
 
+	# Normalizing by the selected range makes stiffness comparable across spectra.
 	coarse_baseline = fit_baseline_cloth(
 		coarse_data,
 		stiffness=stiffness,
 		signal_amplitude=np.ptp(selected_data[:, 1]),
 	)
+	# np.interp needs ascending x; the knots may not be sorted.
 	order = np.argsort(coarse_data[:, 0])
 	baseline = np.interp(
 		data[:, 0], coarse_data[order, 0], coarse_baseline[order]
 	)
+	# Replace the fit inside ignored regions with a smooth bridge.
 	if ignore_ranges:
 		baseline = _smooth_ignored_bridges(fit_data, baseline, ignore_ranges)
 
@@ -107,6 +112,7 @@ def _smooth_ignored_bridges(data, baseline, ignored_ranges):
 	order = np.argsort(data[:, 0])
 	wavenumbers = data[order, 0]
 	fitted = baseline[order].copy()
+	# Merge overlapping ignore ranges so each gap is bridged once.
 	merged_ranges = []
 	for lower, upper in sorted(ignored_ranges):
 		if merged_ranges and lower <= merged_ranges[-1][1]:
@@ -149,12 +155,14 @@ def _smooth_ignored_bridges(data, baseline, ignored_ranges):
 				left_slope = 0.0
 			if right_slope * secant <= 0:
 				right_slope = 0.0
+			# Clamp slopes so the bridge cannot overshoot the spectrum.
 			slope_norm = np.hypot(left_slope / secant, right_slope / secant)
 			if slope_norm > 3:
 				limiter = 3 / slope_norm
 				left_slope *= limiter
 				right_slope *= limiter
 
+		# Cubic Hermite bridge matching the fitted values and slopes at the gap edges.
 		bridge = CubicHermiteSpline(
 			[left_x, right_x],
 			[left_y, right_y],
@@ -164,6 +172,7 @@ def _smooth_ignored_bridges(data, baseline, ignored_ranges):
 			wavenumbers[left_index : right_index + 1]
 		)
 
+	# Undo the sort so results align with the caller's point order.
 	unsorted = np.empty_like(fitted)
 	unsorted[order] = fitted
 	return unsorted
@@ -224,6 +233,7 @@ def show_fit(
 			)
 	axis.set_xlabel("Wavenumber (cm-1)")
 	axis.set_ylabel("Transmittance (%)" if display_as == "transmittance" else "Absorbance")
+	# Reversed x-axis, the usual orientation for IR spectra.
 	axis.set_xlim(float(np.max(data[:, 0])), float(np.min(data[:, 0])))
 	axis.grid(True, alpha=0.25)
 	axis.legend()
@@ -231,10 +241,13 @@ def show_fit(
 		fitted_axis.set_xlim(float(np.max(data[:, 0])), float(np.min(data[:, 0])))
 		fitted_axis.grid(True, alpha=0.25)
 		fitted_axis.legend()
+	# Single-element lists let the slider callbacks update results in place.
 	current_baseline = [np.asarray(baseline, dtype=float)]
 	current_stiffness = [stiffness]
 	if baseline_fitter is not None and stiffness is not None:
+		# Bottom strip is reserved for the slider and value box.
 		figure.tight_layout(rect=(0, 0.15, 1, 1))
+		# Slider spans at least 1e-7 to 1e-3, widened around the starting stiffness.
 		stiffness_exponent = np.log10(float(stiffness))
 		slider_axis = figure.add_axes((0.18, 0.06, 0.52, 0.04))
 		stiffness_slider = Slider(
@@ -308,6 +321,7 @@ def show_fit(
 
 		stiffness_slider.on_changed(update_stiffness)
 		stiffness_input.on_submit(submit_stiffness)
+		# Keep widget references alive; matplotlib otherwise garbage-collects them.
 		setattr(figure, "_stiffness_slider", stiffness_slider)
 		setattr(figure, "_stiffness_input", stiffness_input)
 	else:
@@ -337,6 +351,7 @@ def show_batch_fits(
 		corrected_axis = None
 	figure.tight_layout(rect=(0.05, 0.2, 0.98, 0.91))
 
+	# Same slider range rule as the single-spectrum window.
 	initial_exponent = np.log10(float(stiffness))
 	slider_axis = figure.add_axes((0.13, 0.09, 0.43, 0.045))
 	stiffness_slider = Slider(
@@ -351,11 +366,13 @@ def show_batch_fits(
 	input_axis = figure.add_axes((0.61, 0.085, 0.17, 0.055))
 	stiffness_input = TextBox(input_axis, "Value", initial=f"{stiffness:.2g}")
 	button_axis = figure.add_axes((0.81, 0.085, 0.16, 0.055))
+	# Shared state for the button and slider callbacks.
 	index = [0]
 	saved_paths = []
 	failures = []
 	status_text = figure.text(0.13, 0.025, "", fontsize=9, color="tab:red")
 	save_button = Button(button_axis, "Save / Next")
+	# Set while draw_current_item moves the slider, so its callback does not refit.
 	updating_controls = [False]
 
 	def draw_current_item():
@@ -444,6 +461,7 @@ def show_batch_fits(
 				ignore_ranges=ignore_ranges,
 			)
 			display_units = item["signal_type"] if display_as == "source" else display_as
+			# Checks that the result can be displayed; failures show as a fit error.
 			_convert_for_display(item["data"], new_baseline, item["signal_type"], display_units)
 		except (ValueError, RuntimeError) as error:
 			status_text.set_text(f"Fit failed: {error}")
@@ -506,6 +524,7 @@ def show_batch_fits(
 	setattr(figure, "_batch_save_and_advance", save_and_advance)
 	draw_current_item()
 	plt.show()
+	# Items never saved before the window closed count as failures.
 	for item in items[index[0]:]:
 		if item["output_path"] not in saved_paths:
 			failures.append((item["input_path"], "Not saved before batch review window closed"))
@@ -538,10 +557,12 @@ def _convert_for_display(data, baseline, signal_type, display_as):
 	if signal_type == "transmittance":
 		if np.any(signal <= 0) or np.any(baseline <= 0):
 			raise ValueError("Transmittance values must be positive to display absorbance")
+		# Absorbance from percent transmittance (Beer-Lambert).
 		with np.errstate(divide="ignore", invalid="ignore"):
 			displayed_signal = -np.log10(signal / 100)
 			displayed_baseline = -np.log10(baseline / 100)
 	else:
+		# Percent transmittance from absorbance: T = 100 * 10^-A.
 		with np.errstate(over="ignore", invalid="ignore"):
 			displayed_signal = 100 * np.power(10.0, -signal)
 			displayed_baseline = 100 * np.power(10.0, -baseline)
@@ -551,6 +572,7 @@ def _convert_for_display(data, baseline, signal_type, display_as):
 
 
 def _choose_input_files():
+	# Imported lazily; tkinter is only needed when no paths are given.
 	try:
 		import tkinter as tk
 		from tkinter import filedialog
@@ -636,6 +658,7 @@ def fit_batch_spectra(
 				current_output_path = input_path.with_name(
 					f"{input_path.stem}_corrected.{output_format}"
 				)
+			# Check conversions now so bad values fail before the review window opens.
 			if plot:
 				display_units = resolved_signal_type if display_as == "source" else display_as
 				_convert_for_display(data, baseline, resolved_signal_type, display_units)
@@ -776,6 +799,7 @@ def main(argv=None):
 		),
 	)
 	args = parser.parse_args(argv)
+	# No paths on the command line: open the file picker.
 	if not args.input:
 		try:
 			args.input = _choose_input_files()

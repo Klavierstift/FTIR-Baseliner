@@ -21,6 +21,7 @@ class ASP_Reader:
 		lines = [line.strip() for line in text.splitlines() if line.strip()]
 		data_lines = [line for line in lines if not line.startswith("#")]
 
+		# CSV first; a file with no numeric rows falls back to the ASP layout below.
 		spectrum_rows = []
 		header_signal_type = None
 		for row in csv.reader(StringIO(text)):
@@ -48,6 +49,7 @@ class ASP_Reader:
 		if len(data_lines) < 4:
 			raise ValueError("Agilent ASP file is missing its header or spectral data")
 
+		# Header is count, start, end, then two codes; intensities are the trailing lines.
 		try:
 			point_count_value, start_wavenumber, end_wavenumber = map(float, data_lines[:3])
 			point_count = int(point_count_value)
@@ -61,6 +63,7 @@ class ASP_Reader:
 				f"Agilent ASP header declares {point_count} points, but the file contains only "
 				f"{max(0, len(data_lines) - 3)} values after the header"
 			)
+		# Read from the end so any lines before the data block are skipped.
 		try:
 			intensities = np.asarray(
 				[float(value) for value in data_lines[-point_count:]], dtype=float

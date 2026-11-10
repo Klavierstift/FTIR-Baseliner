@@ -7,18 +7,22 @@ from scipy.sparse.linalg import spsolve
 
 def _minimize_bounded_quadratic(hessian, linear, upper, max_iter=1000, tol=1e-10):
 	"""Minimize 0.5 x'Hx - linear'x over 0 <= x <= upper with projected Newton steps."""
+	# Zero is feasible for 0 <= x <= upper, so it is a valid start.
 	x = np.zeros_like(upper)
+	# Gradient roundoff grows with the largest Hessian entry, so the floor scales with it.
 	tol = max(tol, 1e-13 * float(hessian.diagonal().max()))
 	for _ in range(max_iter):
 		gradient = hessian @ x - linear
 		if np.max(np.abs(np.clip(x - gradient, 0, upper) - x)) <= tol:
 			return x
+		# Variables at a bound whose gradient pushes outward stay fixed this step.
 		lower_active = (x <= 0) & (gradient >= 0)
 		upper_active = (x >= upper) & (gradient <= 0)
 		free = np.flatnonzero(~(lower_active | upper_active))
 		step = np.zeros_like(x)
 		if free.size:
 			reduced = hessian[free][:, free]
+			# Tiny ridge keeps the reduced system solvable when it is nearly singular.
 			ridge = 1e-12 * max(float(reduced.diagonal().max()), 1e-300)
 			step[free] = spsolve(reduced + ridge * identity(free.size, format="csr"), -gradient[free])
 		current = 0.5 * x @ (hessian @ x) - linear @ x
@@ -26,6 +30,7 @@ def _minimize_bounded_quadratic(hessian, linear, upper, max_iter=1000, tol=1e-10
 		while True:
 			candidate = np.clip(x + scale * step, 0, upper)
 			candidate_value = 0.5 * candidate @ (hessian @ candidate) - linear @ candidate
+			# Armijo test; the scale floor ends the search when roundoff hides the decrease.
 			if candidate_value <= current + 1e-4 * (gradient @ (candidate - x)) or scale < 1e-12:
 				break
 			scale *= 0.5
@@ -66,6 +71,7 @@ def fit_baseline_cloth(
 	descending = bool(np.all(differences < 0))
 	if not descending and not np.all(differences > 0):
 		raise ValueError("Wavenumbers must be strictly monotonic without duplicates.")
+	# Solve in ascending order; the baseline is reversed back before returning.
 	if descending:
 		x, y = x[::-1], y[::-1]
 
@@ -80,20 +86,24 @@ def fit_baseline_cloth(
 	else:
 		signal_amplitude = amplitude
 
+	# Positions in [0, 1]; values scaled so the spectrum minimum is 0 and its range is 1.
 	position = (x - x[0]) / (x[-1] - x[0])
 	values = (y - data_minimum) / signal_amplitude
 	intervals = np.diff(position)
 	left_widths = intervals[:-1]
 	right_widths = intervals[1:]
+	# Three-point second-difference stencil for non-uniform spacing.
 	curvature_left = 2 / (left_widths * (left_widths + right_widths))
 	curvature_middle = -2 / (left_widths * right_widths)
 	curvature_right = 2 / (right_widths * (left_widths + right_widths))
 	curvature_weights = (left_widths + right_widths) / 2
+	# Trapezoid weights: the linear term that rewards raising the baseline.
 	area_weights = np.empty_like(position)
 	area_weights[0] = intervals[0] / 2
 	area_weights[-1] = intervals[-1] / 2
 	area_weights[1:-1] = (intervals[:-1] + intervals[1:]) / 2
 
+	# Sparse second-difference matrix D; the Hessian is stiffness * D'WD.
 	count = len(values) - 2
 	rows = np.repeat(np.arange(count), 3)
 	columns = np.column_stack((np.arange(count), np.arange(count) + 1, np.arange(count) + 2)).ravel()
