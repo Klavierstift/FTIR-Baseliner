@@ -18,8 +18,6 @@ class ASP_Reader:
 
 	def read(self) -> np.ndarray:
 		text = self.file_path.read_text(encoding="utf-8-sig")
-		lines = [line.strip() for line in text.splitlines() if line.strip()]
-		data_lines = [line for line in lines if not line.startswith("#")]
 
 		# CSV first; a file with no numeric rows falls back to the ASP layout below.
 		spectrum_rows = []
@@ -46,6 +44,8 @@ class ASP_Reader:
 			self.signal_type = header_signal_type or detect_signal_type(data)
 			return data
 
+		lines = [line.strip() for line in text.splitlines() if line.strip()]
+		data_lines = [line for line in lines if not line.startswith("#")]
 		if len(data_lines) < 4:
 			raise ValueError("Agilent ASP file is missing its header or spectral data")
 

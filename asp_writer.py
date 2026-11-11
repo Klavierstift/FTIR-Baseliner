@@ -27,5 +27,4 @@ class ASP_Writer:
 			output.write(f"{wavenumbers[0]:.10g}\n")
 			output.write(f"{wavenumbers[-1]:.10g}\n")
 			output.write("1\n2\n")
-			for intensity in data[:, 1]:
-				output.write(f"{intensity:.8f}\n")
+			output.write("".join(f"{intensity:.8f}\n" for intensity in data[:, 1].tolist()))

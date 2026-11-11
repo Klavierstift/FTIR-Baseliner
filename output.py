@@ -15,13 +15,11 @@ def write_corrected_spectrum(
 	if output_format == "asp":
 		ASP_Writer(output_path).write(corrected_data)
 	else:
-		np.savetxt(
-			output_path,
-			corrected_data,
-			delimiter=",",
-			header=f"wavenumber,baseline_corrected_{units}",
-			comments="",
-		)
+		# Same bytes as np.savetxt's default '%.18e' format, written in one call.
+		body = "".join(f"{x:.18e},{y:.18e}\n" for x, y in corrected_data.tolist())
+		with open(output_path, "w") as output:
+			output.write(f"wavenumber,baseline_corrected_{units}\n")
+			output.write(body)
 
 
 

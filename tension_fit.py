@@ -43,8 +43,9 @@ def _minimize_bounded_quadratic(hessian, linear, upper, max_iter=1000, tol=1e-10
 	diagonal = hessian.diagonal()
 	tol = max(tol, 1e-13 * float(diagonal.max()))
 	band = _band_storage(hessian)
+	hx = hessian @ x
 	for _ in range(max_iter):
-		gradient = hessian @ x - linear
+		gradient = hx - linear
 		if np.max(np.abs(np.clip(x - gradient, 0, upper) - x)) <= tol:
 			return x
 		# Variables at a bound whose gradient pushes outward stay fixed this step.
@@ -56,11 +57,12 @@ def _minimize_bounded_quadratic(hessian, linear, upper, max_iter=1000, tol=1e-10
 			# Tiny ridge keeps the reduced system solvable when it is nearly singular.
 			ridge = 1e-12 * max(float(diagonal[free_mask].max()), 1e-300)
 			step = _solve_free_block(band, free_mask, -gradient, ridge)
-		current = 0.5 * x @ (hessian @ x) - linear @ x
+		current = 0.5 * x @ hx - linear @ x
 		scale = 1.0
 		while True:
 			candidate = np.clip(x + scale * step, 0, upper)
-			candidate_value = 0.5 * candidate @ (hessian @ candidate) - linear @ candidate
+			candidate_hx = hessian @ candidate
+			candidate_value = 0.5 * candidate @ candidate_hx - linear @ candidate
 			# Armijo test; the scale floor ends the search when roundoff hides the decrease.
 			if candidate_value <= current + 1e-4 * (gradient @ (candidate - x)) or scale < 1e-12:
 				break
@@ -68,6 +70,7 @@ def _minimize_bounded_quadratic(hessian, linear, upper, max_iter=1000, tol=1e-10
 		if scale < 1e-12:
 			break
 		x = candidate
+		hx = candidate_hx
 	raise RuntimeError("Cloth baseline fit did not converge")
 
 
